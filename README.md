@@ -21,11 +21,12 @@
 </p>
 
 <p align="center">
-  <a href="#-quickstart">Quickstart</a> &bull;
-  <a href="#-how-it-works">How It Works</a> &bull;
-  <a href="#-search-modes">Search</a> &bull;
-  <a href="#-cli-reference">CLI</a> &bull;
-  <a href="docs/Home.md">Full Docs</a>
+  <a href="#quickstart">Quickstart</a> &bull;
+  <a href="#how-it-works">How It Works</a> &bull;
+  <a href="#works-with">Sources</a> &bull;
+  <a href="#search">Search</a> &bull;
+  <a href="#all-commands">Commands</a> &bull;
+  <a href="docs/Home.md">Docs</a>
 </p>
 
 ---
@@ -34,9 +35,53 @@
 
 You bookmark tweets. You save ChatGPT conversations. You star GitHub repos. You highlight articles. Then... you never find any of it again.
 
-IdeaBank fixes this. It pulls all your scattered content into **one local database**, enriches it with AI (summaries, tags, embeddings), and lets you search across everything — by keyword, by meaning, or both.
+IdeaBank fixes this. It pulls all your scattered content into **one place**, enriches it with AI (summaries, tags, embeddings), and lets you search across everything — by keyword, by meaning, or both.
 
-No cloud. No subscription. Just a SQLite file you own.
+No cloud. No subscription. Just a single file on your machine that you own.
+
+---
+
+## Works With
+
+<p align="center">
+  <a href="#quickstart"><img src="https://img.shields.io/badge/Twitter%20%2F%20X-000000?style=for-the-badge&logo=x&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/ChatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/Claude-cc785c?style=for-the-badge&logo=anthropic&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/ArXiv-B31B1B?style=for-the-badge&logo=arxiv&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" /></a>
+  &nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/Any%20URL-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" /></a>
+</p>
+
+<p align="center">
+  <em>Export to</em>&nbsp;&nbsp;<a href="#quickstart"><img src="https://img.shields.io/badge/Obsidian-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" /></a>
+</p>
+
+| Source | What you give it | What you get back |
+|:-------|:-----------------|:------------------|
+| **Twitter / X** | Your bookmarks JSON export | Every tweet, author, image, and linked article — fully searchable |
+| **ChatGPT** | `conversations.json` from your data export | All your chats, organized by conversation, with model info |
+| **Claude** | JSON export | Every message, with role attribution |
+| **YouTube** | Links found in your bookmarks | Full video transcripts, searchable by content |
+| **ArXiv** | Paper links found in your bookmarks | Titles, abstracts, and metadata |
+| **GitHub** | Repo links found in your bookmarks | README content and repo metadata |
+| **Any URL** | Article links found in your content | Cleaned full-text, stripped of ads and navigation |
+
+<details>
+<summary>Coming soon</summary>
+
+- Chrome / Brave bookmarks
+- Pocket & Readwise
+- RSS feeds
+- Notion exports
+
+</details>
 
 ---
 
@@ -48,137 +93,151 @@ git clone https://github.com/ZealousEar/ideabank.git
 cd ideabank
 pip install -e .
 
-# Initialize your knowledge base
+# Set up your knowledge base
 ib init
 
-# Import your Twitter bookmarks (JSON export)
+# Import your Twitter bookmarks
 ib ingest twitter bookmarks.json
 
-# Extract full article text from linked URLs
+# Pull in the full text behind every link
 ib extract
 
-# Classify everything with AI (needs OPENAI_API_KEY)
-ib classify --dry-run        # see cost estimate first
+# Let AI tag and summarize everything (needs OPENAI_API_KEY)
+ib classify --dry-run        # preview the cost first
 ib classify                  # run it
 
-# Generate embeddings for semantic search
+# Make everything searchable by meaning
 ib embed
 
-# Search!
+# Find things!
 ib search "transformer attention"     # keyword search
 ib semantic "papers about reasoning"  # meaning-based search
-ib hybrid "LLM agents"               # best of both worlds
+ib hybrid "LLM agents"               # best of both
 ```
 
-> **Note:** Classification and embedding require an OpenAI API key. Set it with `export OPENAI_API_KEY=sk-...` in your shell. Ingestion, extraction, and keyword search work without it.
+> **Note:** Classification and embedding need an OpenAI API key (`export OPENAI_API_KEY=sk-...`). Everything else — importing, extracting articles, keyword search — works without one.
 
 ---
 
 ## How It Works
 
-Every item flows through a six-stage pipeline:
+Your content flows through six stages. Each one is optional — run what you need, skip what you don't.
 
-```
-  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-  │  Ingest  │───▶│ Extract  │───▶│ Classify │───▶│  Embed   │───▶│  Search  │───▶│  Export  │
-  │          │    │          │    │          │    │          │    │          │    │          │
-  │ Twitter  │    │ Articles │    │ LLM tags │    │ Vectors  │    │ FTS5     │    │ Obsidian │
-  │ AI chats │    │ YouTube  │    │ Domains  │    │ 1536-dim │    │ Semantic │    │ Markdown │
-  │ URLs     │    │ ArXiv    │    │ Summaries│    │          │    │ Hybrid   │    │          │
-  └──────────┘    │ GitHub   │    └──────────┘    └──────────┘    └──────────┘    └──────────┘
-                  └──────────┘
-                        │
-                   Everything stored in one SQLite database
-```
+```mermaid
+flowchart LR
+    A["🗂️ Ingest\nImport bookmarks,\nchats, files"] --> B["📄 Extract\nFetch full text\nfrom URLs"]
+    B --> C["🏷️ Classify\nAI-powered tags,\nsummaries, domains"]
+    C --> D["🧬 Embed\nConvert to vectors\nfor meaning search"]
+    D --> E["🔍 Search\nKeyword, semantic,\nor hybrid"]
+    E --> F["📝 Export\nObsidian markdown\nwith wikilinks"]
 
-Each stage is independent — run them in any order, skip what you don't need, re-run with `--force` to update.
+    A <--> DB[("💾 SQLite")]
+    B <--> DB
+    C <--> DB
+    D <--> DB
+    E <--> DB
+
+    style A fill:#F59E0B,color:#fff,stroke:none
+    style B fill:#3B82F6,color:#fff,stroke:none
+    style C fill:#8B5CF6,color:#fff,stroke:none
+    style D fill:#EC4899,color:#fff,stroke:none
+    style E fill:#10B981,color:#fff,stroke:none
+    style F fill:#6366F1,color:#fff,stroke:none
+    style DB fill:#1E293B,color:#fff,stroke:#475569
+```
 
 <details>
-<summary><strong>What happens at each stage?</strong></summary>
+<summary><strong>What's happening under the hood?</strong></summary>
 
 | Stage | What it does | Tech | Needs API key? |
 |:------|:-------------|:-----|:---------------|
 | **Ingest** | Parses Twitter bookmark exports and AI conversation logs into normalized items | JSON parsing, SHA256 dedup | No |
-| **Extract** | Fetches the full text behind URLs — routes to specialized extractors per domain | httpx, trafilatura, ArXiv API, YouTube transcripts | No |
+| **Extract** | Fetches the full text behind URLs — routes to specialized extractors per domain | httpx, trafilatura, ArXiv API, YouTube transcript API | No |
 | **Classify** | LLM labels each item with domain, content type, summary, and tags | GPT-4.1-mini with heuristic fallback | Yes |
 | **Embed** | Creates 1536-dimensional vector representations for semantic similarity | text-embedding-3-small | Yes |
-| **Search** | Three modes: keyword (FTS5), semantic (cosine similarity), hybrid (RRF fusion) | SQLite FTS5, numpy | Semantic/hybrid only |
-| **Export** | Renders items as Obsidian-compatible Markdown with YAML frontmatter and wikilinks | Jinja-style templates | No |
+| **Search** | Three modes: keyword (FTS5/BM25), semantic (cosine similarity), hybrid (Reciprocal Rank Fusion) | SQLite FTS5, numpy | Semantic/hybrid only |
+| **Export** | Renders items as Obsidian-compatible Markdown with YAML frontmatter and wikilinks | Template-based rendering | No |
 
 </details>
 
 ---
 
-## Search Modes
+## Search
 
-IdeaBank gives you three ways to find things:
+Three ways to find what you're looking for:
 
-### Keyword Search (FTS5)
-Exact word matching with BM25 ranking. Fast, precise, great for known terms.
+```mermaid
+flowchart LR
+    Q["Your query"] --> KW["🔤 Keyword\nExact word matching"]
+    Q --> SM["🧠 Semantic\nMeaning-based"]
+    Q --> HY["⚡ Hybrid\nBest of both"]
+
+    KW --> R["Results"]
+    SM --> R
+    HY --> R
+
+    style Q fill:#F59E0B,color:#fff,stroke:none
+    style KW fill:#3B82F6,color:#fff,stroke:none
+    style SM fill:#8B5CF6,color:#fff,stroke:none
+    style HY fill:#10B981,color:#fff,stroke:none
+    style R fill:#1E293B,color:#fff,stroke:#475569
+```
+
+**Keyword** — finds exact matches. Fast and precise when you know what you're looking for.
 ```bash
 ib search "attention mechanism"
 ```
 
-### Semantic Search
-Finds content by *meaning*, not just words. "How do LLMs reason?" will find articles about chain-of-thought prompting even if they never use the word "reason."
+**Semantic** — finds things by *meaning*. Searching "how do LLMs reason" will find articles about chain-of-thought prompting, even if they never use the word "reason."
 ```bash
 ib semantic "how do LLMs reason"
 ```
 
-### Hybrid Search
-Combines both using [Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf). This is usually the best option.
+**Hybrid** — combines both approaches. This is usually the best option.
 ```bash
 ib hybrid "reinforcement learning from human feedback"
 ```
 
----
+<details>
+<summary><strong>How does hybrid search work?</strong></summary>
 
-## Supported Sources
+Hybrid search runs both keyword (FTS5/BM25) and semantic (cosine similarity) searches, then merges results using Reciprocal Rank Fusion (RRF). Items that rank highly in *both* methods float to the top. You can tune the balance with `--fts-weight` (default: 0.4 keyword / 0.6 semantic).
 
-| Source | Format | What gets captured |
-|:-------|:-------|:-------------------|
-| **Twitter/X** | JSON bookmark export | Tweet text, author, media, linked URLs, timestamps |
-| **ChatGPT** | `conversations.json` export | All messages, model info, conversation metadata |
-| **Claude** | JSON export | Messages with role attribution |
-| **URLs** | Extracted via pipeline | Full article text, YouTube transcripts, ArXiv abstracts, GitHub READMEs |
-
-More sources (Chrome bookmarks, Pocket, Readwise, RSS) are on the roadmap.
+</details>
 
 ---
 
-## CLI Reference
+## All Commands
 
 ```
-Usage: ib [COMMAND]
+ib init                       Set up your knowledge base
+ib ingest twitter FILE        Import Twitter bookmarks
+ib ingest conversation FILE   Import ChatGPT/Claude conversations
+ib check SOURCE               Auto-detect and import new files
+ib extract                    Fetch full text from linked URLs
+ib classify                   AI tagging and summarization
+ib embed                      Generate vectors for semantic search
+ib export                     Render to Obsidian Markdown
 
-Pipeline:
-  init                    Set up database and directories
-  ingest SOURCE FILE      Import a file (twitter, conversation)
-  check SOURCE            Auto-detect and ingest new files
-  extract                 Fetch linked URL content
-  classify                LLM classification (domain, tags, summary)
-  embed                   Generate vector embeddings
-  export                  Render to Obsidian Markdown
+ib search QUERY               Keyword search
+ib semantic QUERY             Meaning-based search
+ib hybrid QUERY               Combined search (recommended)
 
-Search:
-  search QUERY            Full-text search (FTS5 + BM25)
-  semantic QUERY          Semantic search (cosine similarity)
-  hybrid QUERY            Hybrid search (RRF fusion)
-
-Management:
-  status                  Show source sync status
-  stats                   Detailed statistics (items, stages, topics, embeddings)
-  inbox                   Items not yet reviewed
-  stage ITEM_ID STAGE     Move item through workflow (inbox → reviewed → exploring → reference → archived)
-  tag ITEM_ID TAG [TAG]   Add tags to an item
-  categorize              Auto-categorize items by pattern matching
+ib stats                      See what's in your knowledge base
+ib inbox                      Items you haven't reviewed yet
+ib stage ITEM_ID STAGE        Move items through your workflow
+ib tag ITEM_ID TAG            Add tags to any item
+ib categorize                 Auto-sort items into topics
 ```
 
-Every command that hits the API supports `--dry-run` to preview costs before spending money.
+> Every command that calls an API supports `--dry-run` so you can preview the cost before spending anything.
 
 ---
 
 ## Project Structure
+
+<details>
+<summary>For contributors</summary>
 
 ```
 ideabank/
@@ -197,9 +256,10 @@ ideabank/
 └── tests/                      # (coming soon)
 ```
 
----
+</details>
 
-## Tech Stack
+<details>
+<summary>Tech stack</summary>
 
 | Layer | Technology | Why |
 |:------|:-----------|:----|
@@ -207,11 +267,13 @@ ideabank/
 | **Models** | Pydantic v2 | Validation, serialization, type safety |
 | **Async** | aiosqlite + httpx | Non-blocking I/O for batch extraction and embedding |
 | **Classification** | OpenAI GPT-4.1-mini | Cheap, fast, good enough for tagging |
-| **Embeddings** | text-embedding-3-small (1536d) | Best price/quality ratio for personal-scale search |
+| **Embeddings** | text-embedding-3-small (1536d) | Best price/quality for personal-scale search |
 | **Vector search** | sqlite-vec (optional) | Native SQLite extension; falls back to JSON + numpy |
 | **Extraction** | trafilatura | Best Python library for article text extraction |
 | **CLI** | Typer + Rich | Type-driven argument parsing, pretty terminal output |
 | **IDs** | ULID | Sortable by time, globally unique, URL-safe |
+
+</details>
 
 ---
 
@@ -230,7 +292,8 @@ IdeaBank stores everything under `~/.ideabank/`:
 └── cache/               # Extraction cache
 ```
 
-Override defaults in `config.yaml`:
+<details>
+<summary>Example config</summary>
 
 ```yaml
 db_path: ~/.ideabank/db/ideabank.db
@@ -245,42 +308,44 @@ embedding:
   dimensions: 1536
 ```
 
+</details>
+
 ---
 
 ## FAQ
 
 <details>
-<summary><strong>How much does it cost to run?</strong></summary>
+<summary><strong>How much does it cost?</strong></summary>
 
-Ingestion, extraction, and keyword search are **free** (no API calls). Classification with GPT-4.1-mini costs roughly **$0.01 per 100 items**. Embedding costs about **$0.002 per 100 items**. Use `--dry-run` on any command to see the estimate before committing.
+Importing, extracting articles, and keyword search are **completely free** — no API calls involved. AI classification costs about **$0.01 per 100 items**. Embeddings cost about **$0.002 per 100 items**. Use `--dry-run` on any command to see the exact estimate before spending anything.
 
 </details>
 
 <details>
 <summary><strong>Do I need Obsidian?</strong></summary>
 
-No. IdeaBank works as a standalone CLI + SQLite database. The Obsidian export (`ib export`) is optional — it renders your items as Markdown files with frontmatter and wikilinks, which Obsidian can display as a connected knowledge graph. But you can use the search commands without ever touching Obsidian.
+Nope. IdeaBank works as a standalone command-line tool. The Obsidian export is just a bonus — it turns your knowledge base into a connected graph of Markdown notes. But searching, tagging, and organizing all work without it.
 
 </details>
 
 <details>
-<summary><strong>Can I use a different LLM?</strong></summary>
+<summary><strong>Can I use a different AI model?</strong></summary>
 
-The classification and embedding modules use the OpenAI SDK. Any OpenAI-compatible API (Ollama, LiteLLM, Azure OpenAI) should work by setting the `OPENAI_BASE_URL` environment variable. We haven't tested every provider, but the interface is standard.
+Yes. Anything compatible with the OpenAI API works — Ollama (free, local), LiteLLM, Azure OpenAI. Just set the `OPENAI_BASE_URL` environment variable to point at your provider.
 
 </details>
 
 <details>
 <summary><strong>How do I export my Twitter bookmarks?</strong></summary>
 
-Use your Twitter/X data export (Settings → Your Account → Download an archive), or a tool like [twitter-bookmarks-export](https://github.com/search?q=twitter+bookmarks+export) to get a JSON file. Drop it into `~/.ideabank/raw/twitter/` and run `ib check twitter`.
+Go to Settings → Your Account → Download an archive on Twitter/X. Or use a browser extension like [twitter-bookmarks-export](https://github.com/search?q=twitter+bookmarks+export) to get a JSON file. Drop it into `~/.ideabank/raw/twitter/` and run `ib check twitter`.
 
 </details>
 
 <details>
 <summary><strong>Is my data private?</strong></summary>
 
-Yes. Everything stays on your machine in a local SQLite file. The only external calls are to the OpenAI API for classification and embedding — and only when you explicitly run those commands.
+Yes. Everything stays on your computer in a local file. The only external calls are to the OpenAI API for classification and embedding — and only when you explicitly run those commands. Nothing is sent anywhere else.
 
 </details>
 
@@ -288,12 +353,12 @@ Yes. Everything stays on your machine in a local SQLite file. The only external 
 
 ## Roadmap
 
-- [ ] Chrome / Brave bookmark ingestion
-- [ ] Pocket and Readwise import
+- [ ] Chrome / Brave bookmark import
+- [ ] Pocket & Readwise sync
 - [ ] RSS feed monitoring
-- [ ] Local embedding models (no API key needed)
+- [ ] Local AI models (no API key needed)
 - [ ] Web UI for browsing and search
-- [ ] Plugin system for custom extractors
+- [ ] Plugin system for custom sources
 
 ---
 

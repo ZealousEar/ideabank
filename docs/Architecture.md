@@ -1,6 +1,6 @@
 # Architecture
 
-IdeaBank is a six-stage pipeline with SQLite at the center. Each stage is independent — you can re-run any stage without affecting the others, and failures in one stage don't cascade.
+IdeaBank is a six-stage pipeline with SQLite at the center. Each stage is independent. Any stage can be re-run without affecting the others, and failures in one stage do not cascade.
 
 ## Pipeline Overview
 
@@ -8,7 +8,6 @@ IdeaBank is a six-stage pipeline with SQLite at the center. Each stage is indepe
 flowchart TD
     TW[Twitter Bookmark JSON] --> ING[Ingest]
     CV[AI Conversation Logs] --> ING
-    AR[Articles / URLs] --> ING
 
     ING --> |normalized items + events| DB[(SQLite)]
 
@@ -16,7 +15,7 @@ flowchart TD
     EXT --> |linked_content| DB
 
     DB --> CLS[Classify]
-    CLS --> |domain labels, summaries, tags| DB
+    CLS --> |domain labels, content types, summaries, tags| DB
 
     DB --> EMB[Embed]
     EMB --> |1536-dim vectors| DB
@@ -32,9 +31,11 @@ flowchart TD
 
 ## Stage Details
 
+The code snippets in this document are illustrative pseudocode. They show the shape of the implementation, not exact copies of the source.
+
 ### 1. Ingest
 
-Parses Twitter bookmark JSON exports and AI conversation logs (ChatGPT, Claude). Each raw input gets fingerprinted and stored in `raw_ingestions` for deduplication — if I accidentally import the same export twice, nothing happens.
+Parses Twitter bookmark JSON exports and AI conversation logs (ChatGPT, Claude). Each raw input gets fingerprinted and stored in `raw_ingestions` for deduplication. Re-importing the same export is skipped unless forced.
 
 The ingestion process:
 1. Parse the source format (Twitter JSON, conversation export, etc.)
@@ -44,7 +45,7 @@ The ingestion process:
 5. Write `events` entries for the activity log
 6. Update `source_state` watermarks for incremental ingestion
 
-**Canonicalization** is important here. Twitter URLs get unwrapped (t.co → actual URL), query params get stripped, and trailing slashes get normalized. This prevents the same link from appearing as three different items.
+**Canonicalization** is important here. Twitter URLs get unwrapped (`t.co -> actual URL`), query params get stripped, and trailing slashes get normalized. This prevents the same link from appearing as different items.
 
 ```python
 async def ingest_twitter(db: Database, path: Path) -> IngestResult:
@@ -61,40 +62,44 @@ async def ingest_twitter(db: Database, path: Path) -> IngestResult:
 
 ### 2. Extract
 
-Routes URLs to domain-specific extractors. The router inspects the URL and picks the right extractor — arXiv papers get the arXiv extractor, GitHub repos get the GitHub extractor, everything else falls through to the generic article extractor.
+Scans already-ingested items for URLs in their text and metadata, then routes each discovered URL to a domain-specific extractor. Users do not feed URLs directly to this stage. `ib extract` operates on URLs found inside items that were already ingested from Twitter bookmarks or conversation logs.
 
-All extraction is async via httpx with concurrency limits (10 simultaneous requests by default). Extracted content lands in the `linked_content` table.
+The router inspects each discovered URL and picks the right extractor. arXiv papers use the arXiv extractor, GitHub repositories use the GitHub extractor, and everything else falls through to the generic article extractor.
+
+All extraction is async via `httpx` with concurrency limits, 3 simultaneous requests by default. Extracted content lands in the `linked_content` table.
 
 See [Extractors](Extractors.md) for details on each extractor.
 
 ### 3. Classify
 
-Sends item text to GPT-4.1-mini with a custom taxonomy prompt. The model returns structured JSON with:
+Sends item text to `gpt-4.1-mini` with a custom taxonomy prompt. The stored classification record includes:
 
-- **domain**: Primary category (e.g., "machine-learning", "systems-programming", "finance")
-- **summary**: 1-2 sentence description
-- **tags**: 3-8 relevant tags
-- **confidence**: Float 0-1
+- **domain**: Primary category (for example, `ai-ml`, `software-eng`, `finance-quant`)
+- **domain_secondary**: Optional secondary category when content spans two domains
+- **content_type**: High-level kind such as `paper`, `repo`, `article`, `thread`, or `tweet`
+- **summary**: Short description of the key idea
+- **tags**: A small set of relevant tags
+- **confidence**: `1.0` for validated model output, lower for heuristic fallback
 
-Classifications are stored in the `classifications` table with the raw LLM response for debugging. If a classification looks wrong, I can inspect exactly what the model saw and returned.
+Classifications are stored in the `classifications` table. The stored record includes normalized labels, the model name, and a content hash used to skip unchanged items. The raw LLM response is not persisted.
 
 ```python
-CLASSIFY_PROMPT = """Classify this item into one of these domains: {domains}
+CLASSIFY_PROMPT = """Classify this item into the available domains and content types.
 
-Return JSON with: domain, summary, tags (list), confidence (0-1).
-Only use domains from the list. If unsure, use "general" with low confidence.
+Return JSON with: domain, domain_secondary, content_type, summary, tags.
+Use null for domain_secondary when it does not apply.
 
 Item text:
 {text}"""
 ```
 
-I chose GPT-4.1-mini here because classification doesn't need deep reasoning — it needs to be fast and cheap across thousands of items. At ~$0.001 per item, classifying all 5,808 items costs about $6.
+`gpt-4.1-mini` is the default because this stage is repeated labeling work, not deep reasoning. Cost scales with token volume, and the batch classifier estimates the spend before execution.
 
 ### 4. Embed
 
-Generates vector embeddings using OpenAI's text-embedding-3-small (1,536 dimensions). Processing happens in batches of 500 items to stay within rate limits and manage memory.
+Generates vector embeddings using OpenAI's `text-embedding-3-small` model (1,536 dimensions by default). Processing happens in batches of 500 items by default to stay within rate limits and manage memory.
 
-The embedding input is a concatenation of the item title, any extracted text, and the classification summary. This gives the vector a richer signal than just the title alone.
+The embedding input combines the item title, author, main text representation, optional classification summary, and optional linked content text. This gives the vector a richer signal than the title alone.
 
 ```python
 async def embed_batch(items: list[Item], client: AsyncOpenAI) -> list[Embedding]:
@@ -104,13 +109,13 @@ async def embed_batch(items: list[Item], client: AsyncOpenAI) -> list[Embedding]
         input=texts,
     )
     return [
-        Embedding(item_id=item.id, model="text-embedding-3-small",
-                  dimensions=1536, vector=e.embedding)
+        Embedding(item_id=item.id, embedding_model="text-embedding-3-small",
+                  dimensions=1536, embedding_json=e.embedding)
         for item, e in zip(items, response.data)
     ]
 ```
 
-Embeddings are stored as binary blobs in the `embeddings` table. At 1,536 floats × 4 bytes = ~6KB per item, the full 5,808-item collection is about 35MB of vectors.
+Embeddings are stored in the `embeddings` table, with the vector serialized in `embedding_json`. Storage grows linearly with the number of embedded items and the chosen dimensions.
 
 ### 5. Search
 
@@ -127,7 +132,7 @@ Renders items to Obsidian-compatible Markdown files with YAML frontmatter, tags,
 ```markdown
 ---
 title: "Attention Is All You Need"
-domain: machine-learning
+domain: ai-ml
 tags: [transformers, attention, nlp]
 source: https://arxiv.org/abs/1706.03762
 created: 2024-03-15
@@ -149,16 +154,16 @@ Tags become Obsidian tags, domains map to folders, and links between items becom
 
 ## Design Decisions
 
-**Why SQLite?** It's the right tool for a single-user knowledge base. No server to manage, the entire database is one file, WAL mode gives great read concurrency, and FTS5 is built in. At 5,808 items, we're nowhere near SQLite's limits.
+**Why SQLite?** It fits a single-user knowledge base well. No server to manage, the entire database is one file, WAL mode gives strong read concurrency, and FTS5 is built in. Typical local knowledge-base workloads are far below SQLite's practical limits.
 
-**Why async?** Extraction is I/O-bound — we're fetching hundreds of URLs. Async lets us run 10 requests concurrently without threads. Classification and embedding are also I/O-bound (API calls), so async helps there too.
+**Why async?** Extraction is network-bound because it fetches URLs discovered inside ingested items. Async lets the system run several requests concurrently without threads. Classification and embedding are also external-call-bound, so async helps there too.
 
-**Why stages instead of a single pipeline?** Each stage can fail independently. If the arXiv extractor breaks, I don't want that to block classification of items that already have text. Stages also let me re-run just one part of the pipeline — re-classify everything with an updated prompt without re-extracting.
+**Why stages instead of a single pipeline?** Each stage can fail independently. If the arXiv extractor breaks, classification of items that already have text can still proceed. Stages also make it possible to re-run one part of the pipeline, such as reclassifying everything with an updated prompt, without re-extracting.
 
 ## Navigation
 
-- [Home](Home.md) — Back to main page
-- [Database Schema](Database-Schema.md) — Table definitions and relationships
-- [Search](Search.md) — Search modes in detail
-- [Extractors](Extractors.md) — Content extraction system
-- [CLI Reference](CLI-Reference.md) — Running the pipeline
+- [Home](Home.md): Back to main page
+- [Database Schema](Database-Schema.md): Table definitions and relationships
+- [Search](Search.md): Search modes in detail
+- [Extractors](Extractors.md): Content extraction system
+- [CLI Reference](CLI-Reference.md): Running the pipeline

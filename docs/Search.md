@@ -1,6 +1,6 @@
 # Search
 
-IdeaBank supports three search modes, each with different strengths. In practice I use hybrid search for almost everything, but the other two modes are useful in specific situations.
+IdeaBank supports three search modes, each with different strengths. In practice, hybrid search is the default for most use cases, but the other two modes are useful in specific situations.
 
 ## Comparison
 
@@ -10,13 +10,13 @@ IdeaBank supports three search modes, each with different strengths. In practice
 | **Accuracy** | Good for exact terms | Good for concepts | Best overall |
 | **Keyword matching** | Excellent | Poor | Good |
 | **Conceptual matching** | Poor | Excellent | Good |
-| **When to use** | Know the exact term | Exploring related ideas | Default — use this |
+| **When to use** | Know the exact term | Exploring related ideas | Default; use this |
 
 All three modes return results as a ranked list with scores. The CLI commands are `ib search`, `ib semantic`, and `ib hybrid` respectively (see [CLI Reference](CLI-Reference.md)).
 
 ## Full-Text Search (FTS5)
 
-Uses SQLite's built-in FTS5 extension with BM25 ranking. This is traditional keyword search — if the query words appear in the item, it's a match.
+Uses SQLite's built-in FTS5 extension with BM25 ranking. This is traditional keyword search; if the query words appear in the item, it's a match.
 
 ### How it works
 
@@ -92,11 +92,11 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 ### Performance
 
-Computing cosine similarity against 5,808 vectors takes about 50ms in Python. That's fast enough for interactive use. If the collection grows to 100k+ items, I'd switch to an approximate nearest neighbor index (like FAISS or sqlite-vss), but for now brute force is fine.
+Computing cosine similarity against N vectors takes about 50ms in Python. That's fast enough for interactive use. If the collection grows to 100k+ items, an approximate nearest neighbor index (like FAISS or sqlite-vss) would likely make more sense, but for now brute force is fine.
 
 ### Strengths and Weaknesses
 
-Semantic search finds conceptually similar items even when there's no keyword overlap. Searching for "how LLMs learn to follow instructions" will surface items about RLHF, instruction tuning, and alignment — even if they never use that exact phrase.
+Semantic search finds conceptually similar items even when there's no keyword overlap. Searching for "how LLMs learn to follow instructions" will surface items about RLHF, instruction tuning, and alignment, even if they never use that exact phrase.
 
 The downside: it can be too fuzzy. If you search for a specific paper title, FTS5 will nail it instantly. Semantic search might return the paper, but it'll also return ten vaguely related items with similar scores.
 
@@ -137,12 +137,12 @@ score = sum(weight / (k + rank)) for each result list containing the item
 
 Where:
 - `k = 60` is a constant that prevents high-ranked items from dominating too much
-- `fts_weight = 0.4` — keyword matching contributes 40%
-- `semantic_weight = 0.6` — semantic similarity contributes 60%
+- `fts_weight = 0.4`, keyword matching contributes 40%
+- `semantic_weight = 0.6`, semantic similarity contributes 60%
 
 ### Why 0.4/0.6 weighting?
 
-I tested different weightings against a set of ~50 queries where I knew the "right" answers. Equal weighting (0.5/0.5) was decent, but tilting toward semantic gave better results for exploratory queries without hurting exact-match queries much. The FTS5 component still rescues cases where semantic search gets confused by ambiguous terms.
+Different weightings were tested against a set of ~50 queries with known expected answers. Equal weighting (0.5/0.5) was decent, but tilting toward semantic gave better results for exploratory queries without hurting exact-match queries much. The FTS5 component still rescues cases where semantic search gets confused by ambiguous terms.
 
 ### Example
 
@@ -173,7 +173,7 @@ Results are enriched with titles and snippets before display. Snippets for FTS5 
 
 ## Navigation
 
-- [Home](Home.md) — Back to main page
-- [Architecture](Architecture.md) — Where search fits in the pipeline
-- [Database Schema](Database-Schema.md) — Tables that power search (items_fts, embeddings)
-- [CLI Reference](CLI-Reference.md) — The search commands
+- [Home](Home.md), back to main page
+- [Architecture](Architecture.md), where search fits in the pipeline
+- [Database Schema](Database-Schema.md), tables that power search (items_fts, embeddings)
+- [CLI Reference](CLI-Reference.md), the search commands

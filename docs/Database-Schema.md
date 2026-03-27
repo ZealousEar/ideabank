@@ -1,6 +1,10 @@
 # Database Schema
 
-IdeaBank uses SQLite with 14 tables, FTS5 virtual tables for full-text search, and a handful of pragmas that make everything fast. The database file typically sits at `~/.ideabank/ideabank.db`.
+IdeaBank schema v4.0 uses SQLite with 14 tables, FTS5 virtual tables for full-text search, and a handful of pragmas that make everything fast. The database file typically sits at `~/.ideabank/ideabank.db`.
+
+This schema is illustrative. The authoritative schema is defined in `src/ideabank/core/database.py`.
+
+FTS5 virtual tables are maintained with triggers for automatic indexing.
 
 ## SQLite Configuration
 
@@ -11,11 +15,11 @@ PRAGMA foreign_keys = ON;         -- Actually enforce FK constraints
 PRAGMA busy_timeout = 5000;       -- Wait 5s on lock instead of failing immediately
 ```
 
-WAL mode is the big one — it means search queries never block ingestion, and vice versa.
+WAL mode is the key setting. It means search queries never block ingestion, and vice versa.
 
 ## Entity Relationship Diagram
 
-Here are the core relationships (simplified to the key tables):
+Here are the core relationships, simplified to the key tables:
 
 ```mermaid
 erDiagram
@@ -30,52 +34,53 @@ erDiagram
     conversations ||--o{ messages : "has"
 
     items {
-        integer id PK
+        text id PK
         text kind
         text canonical_uri
         text title
-        text author
+        text author_name
         text created_at
         text metadata_json
     }
 
     events {
-        integer id PK
+        text id PK
         text event_type
-        integer item_id FK
+        text item_id FK
         text occurred_at
         text source
         text dedupe_key
     }
 
     linked_content {
-        integer id PK
-        integer item_id FK
+        text id PK
+        text source_item_id FK
         text extractor
         text extracted_text
-        text metadata_json
+        text status
+        text canonical_url
     }
 
     classifications {
-        integer id PK
-        integer item_id FK
+        text id PK
+        text item_id FK
         text domain
         real confidence
-        text raw_response
+        text model_name
     }
 
     embeddings {
-        integer id PK
-        integer item_id FK
-        text model
+        text id PK
+        text item_id FK
+        text embedding_model
         integer dimensions
-        blob vector
+        text embedding_json
     }
 
     topics {
-        integer id PK
+        text id PK
         text slug
-        text label
+        text name
     }
 ```
 
@@ -83,20 +88,25 @@ erDiagram
 
 ### items
 
-The core table. Every bookmark, conversation, article — everything is an item.
+The core table. Every bookmark, conversation, article, and related object is stored as an item.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key, autoincrement |
-| kind | TEXT | "bookmark", "conversation", "article" |
-| canonical_uri | TEXT | Normalized URL (unique) |
+| item_rowid | INTEGER | Internal SQLite rowid primary key, used by FTS |
+| id | TEXT | Unique ULID identifier |
+| kind | TEXT | Item kind such as "bookmark", "conversation", or "article" |
+| canonical_uri | TEXT | Normalized URL or canonical identifier, unique, nullable |
+| canonicalizer_version | TEXT | Canonicalization ruleset version, default `'1'` |
 | title | TEXT | Item title, nullable |
-| author | TEXT | Author/creator, nullable |
-| created_at | TEXT | ISO 8601 timestamp |
-| updated_at | TEXT | ISO 8601 timestamp |
+| author_name | TEXT | Author or creator name, nullable |
+| author_handle | TEXT | Source-specific author handle, nullable |
+| author_uri | TEXT | Source-specific author URI, nullable |
+| created_at | TEXT | Source timestamp, nullable |
+| first_seen_at | TEXT | ISO 8601 timestamp when first stored |
+| updated_at | TEXT | ISO 8601 timestamp when last updated |
 | metadata_json | TEXT | Flexible JSON blob for source-specific data |
 
-The `canonical_uri` column has a unique index. This is what prevents duplicates — two different Twitter bookmark exports with the same underlying URL resolve to the same canonical URI.
+The `canonical_uri` column has a unique index. This prevents duplicates; two imports with the same underlying canonical URI resolve to the same item.
 
 ```sql
 CREATE UNIQUE INDEX idx_items_canonical_uri ON items(canonical_uri);
@@ -104,86 +114,117 @@ CREATE UNIQUE INDEX idx_items_canonical_uri ON items(canonical_uri);
 
 ### events
 
-Append-only activity log. Every meaningful thing that happens gets an event — ingestion, extraction, classification, export, errors. This is the audit trail.
+Append-only activity log. Every meaningful system event is recorded here, including ingestion, extraction, classification, export, and errors.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| event_type | TEXT | "ingested", "extracted", "classified", "exported", "error" |
-| item_id | INTEGER | FK → items, nullable (some events are global) |
+| event_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| event_type | TEXT | Event type such as "ingested", "extracted", "classified", "exported", or "error" |
+| item_id | TEXT | FK → items.id |
 | occurred_at | TEXT | ISO 8601 timestamp |
-| source | TEXT | What triggered it ("cli", "scheduler", etc.) |
-| payload_json | TEXT | Event-specific data |
-| dedupe_key | TEXT | Prevents duplicate events |
+| source | TEXT | Trigger source such as "cli" or "scheduler" |
+| context_json | TEXT | Event-specific JSON data, nullable |
+| dedupe_key | TEXT | Prevents duplicate events when combined with source and event_type, nullable |
 
-The `dedupe_key` is a hash of the event type + item ID + relevant content. If the same extraction runs twice on the same item, only one event gets recorded.
+The `dedupe_key` participates in a partial unique index on `(source, event_type, dedupe_key)` when `dedupe_key` is not `NULL`.
 
 ### source_state
 
-Watermarks for incremental ingestion. Tracks the last-seen timestamp or offset for each source so we only process new data on subsequent runs.
+Watermarks for incremental ingestion. Tracks per-source timestamps, file hashes, and serialized state so later runs can resume efficiently.
 
 | Column | Type | Notes |
 |---|---|---|
-| source_name | TEXT | Primary key ("twitter", "chatgpt", etc.) |
-| last_sync_at | TEXT | ISO 8601 timestamp |
-| cursor | TEXT | Source-specific cursor/offset |
-| metadata_json | TEXT | Additional state |
+| source | TEXT | Primary key |
+| last_checked_at | TEXT | ISO 8601 timestamp, nullable |
+| last_ingested_at | TEXT | ISO 8601 timestamp, nullable |
+| watermark_occurred_at | TEXT | Source watermark timestamp, nullable |
+| last_file_hash | TEXT | Last processed file hash, nullable |
+| state_json | TEXT | Additional source state as JSON, nullable |
 
 ### representations
 
-Text representations of items. An item might have its original tweet text, extracted article text, a cleaned version, etc. Multiple representations per item.
+Text and structured representations of items. An item can have multiple derived or source representations.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items |
-| kind | TEXT | "original_text", "extracted_text", "cleaned_text" |
-| content | TEXT | The actual text |
+| rep_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| item_id | TEXT | FK → items.id |
+| rep_type | TEXT | Representation type such as "original_text" or "extracted_text" |
+| content_text | TEXT | Text form, nullable |
+| content_json | TEXT | Structured JSON form, nullable |
+| source_rep_id | TEXT | FK → representations.id, nullable |
+| processor | TEXT | Component that produced this representation, nullable |
+| processor_version | TEXT | Processor version, nullable |
+| content_hash | TEXT | Hash of representation content, nullable |
 | created_at | TEXT | ISO 8601 timestamp |
 
 ### annotations
 
-User-added notes on items. These are things I manually attach — "this is relevant to project X" or "follow up on this".
+User-added notes and review metadata for items.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items |
-| body | TEXT | Annotation text |
+| annotation_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| item_id | TEXT | FK → items.id, unique |
+| note_text | TEXT | Annotation text, nullable |
+| tags_json | TEXT | JSON array of tags, nullable |
+| rating | INTEGER | Optional rating from 1 to 5 |
+| stage | TEXT | Workflow stage, default `'inbox'` |
 | created_at | TEXT | ISO 8601 timestamp |
+| updated_at | TEXT | ISO 8601 timestamp |
+| obsidian_path | TEXT | Exported note path, nullable |
+| obsidian_hash | TEXT | Export hash, nullable |
+| exported_at | TEXT | ISO 8601 timestamp, nullable |
 
 ### topics
 
-Topic slugs for categorization. A flat list (not hierarchical) — things like "machine-learning", "distributed-systems", "career".
+Topic definitions for categorization. Topics are flat by default, with optional parent links for grouping.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| slug | TEXT | URL-safe identifier (unique) |
-| label | TEXT | Human-readable name |
+| topic_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| name | TEXT | Human-readable name, unique |
+| slug | TEXT | URL-safe identifier, unique |
+| parent_id | TEXT | FK → topics.id, nullable |
+| patterns_json | TEXT | JSON detection patterns, nullable |
+| accounts_json | TEXT | JSON account matchers, nullable |
+| color | TEXT | Optional display color |
+| created_at | TEXT | ISO 8601 timestamp |
 
 ### item_topics
 
-Many-to-many join between items and topics. An item can have multiple topics, a topic can have many items.
+Many-to-many join between items and topics. An item can have multiple topics, and a topic can be attached to many items.
 
 | Column | Type | Notes |
 |---|---|---|
-| item_id | INTEGER | FK → items |
-| topic_id | INTEGER | FK → topics |
+| item_id | TEXT | FK → items.id |
+| topic_id | TEXT | FK → topics.id |
+| confidence | REAL | Match confidence, default `1.0` |
+| source | TEXT | Assignment source, default `'pattern'` |
+| created_at | TEXT | ISO 8601 timestamp |
 
-Composite primary key on (item_id, topic_id).
+Composite primary key on `(item_id, topic_id)`.
 
 ### conversations
 
-Links items to conversation records. When I ingest a ChatGPT or Claude conversation, the conversation itself is tracked here, and the individual messages go in `messages`.
+First-class conversation metadata. Conversation items map to this table, and individual messages are stored in `messages`.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items |
-| source | TEXT | "chatgpt", "claude", "gemini" |
-| external_id | TEXT | ID from the source platform |
-| started_at | TEXT | ISO 8601 timestamp |
+| conversation_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| item_id | TEXT | FK → items.id, unique |
+| platform | TEXT | Conversation platform such as "chatgpt", "claude", or "gemini" |
+| model | TEXT | Model name, nullable |
+| title | TEXT | Conversation title, nullable |
+| started_at | TEXT | ISO 8601 timestamp, nullable |
+| ended_at | TEXT | ISO 8601 timestamp, nullable |
+| summary_text | TEXT | Conversation summary, nullable |
+| key_insights_json | TEXT | JSON array or object of extracted insights, nullable |
 
 ### messages
 
@@ -191,38 +232,56 @@ Individual messages within conversations.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| conversation_id | INTEGER | FK → conversations |
-| role | TEXT | "user", "assistant", "system" |
-| content | TEXT | Message text |
-| position | INTEGER | Order within conversation |
+| message_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| conversation_id | TEXT | FK → conversations.id |
+| role | TEXT | Message role such as "user", "assistant", or "system" |
+| content_text | TEXT | Message text, nullable |
+| content_json | TEXT | Structured message payload, nullable |
+| message_index | INTEGER | Order within the conversation |
 | created_at | TEXT | ISO 8601 timestamp |
+
+Unique index on `(conversation_id, message_index)`.
 
 ### raw_ingestions
 
-Fingerprinted raw data for deduplication. Before parsing anything, we store the SHA-256 of the raw input. If we've seen that fingerprint before, we skip the entire file.
+Fingerprinted raw data for deduplication. The source file metadata and hash are stored before parsing so repeated imports can be skipped.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| fingerprint | TEXT | SHA-256 hash (unique) |
-| source | TEXT | "twitter_json", "chatgpt_export", etc. |
-| ingested_at | TEXT | ISO 8601 timestamp |
-| item_count | INTEGER | How many items were in this batch |
+| ingestion_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| source | TEXT | Source identifier such as "twitter_json" or "chatgpt_export" |
+| file_path | TEXT | Imported file path |
+| file_hash | TEXT | Source file hash, unique |
+| record_count | INTEGER | Number of records discovered, nullable |
+| schema_version | TEXT | Source schema version, nullable |
+| imported_at | TEXT | ISO 8601 timestamp |
 
 ### linked_content
 
-Extracted content from URLs. When an item contains a URL, the extractor fetches it and stores the result here.
+Extracted content from URLs. When an item references a URL, the extractor fetches it and stores the result here.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items |
-| url | TEXT | The URL that was fetched |
-| extractor | TEXT | "article", "arxiv", "github", "youtube" |
-| extracted_text | TEXT | Main text content |
-| metadata_json | TEXT | Extractor-specific structured data |
-| fetched_at | TEXT | ISO 8601 timestamp |
+| lc_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| source_item_id | TEXT | FK → items.id |
+| url | TEXT | Original fetched URL |
+| canonical_url | TEXT | Canonicalized URL |
+| domain | TEXT | Extracted domain, nullable |
+| content_type | TEXT | MIME-like content type, nullable |
+| title | TEXT | Extracted title, nullable |
+| extracted_text | TEXT | Main text content, nullable |
+| word_count | INTEGER | Extracted word count, default `0` |
+| extractor | TEXT | Extractor name, nullable |
+| status | TEXT | Extraction state, default `'pending'` |
+| error_message | TEXT | Extraction error, nullable |
+| content_hash | TEXT | Extracted content hash, nullable |
+| created_at | TEXT | ISO 8601 timestamp |
+| updated_at | TEXT | ISO 8601 timestamp |
+
+Unique constraint on `(source_item_id, canonical_url)`.
 
 ### classifications
 
@@ -230,30 +289,37 @@ LLM-assigned labels and metadata.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items (unique — one classification per item) |
+| cls_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| item_id | TEXT | FK → items.id, unique |
 | domain | TEXT | Primary domain label |
-| summary | TEXT | 1-2 sentence summary |
-| tags_json | TEXT | JSON array of tags |
-| confidence | REAL | 0.0 to 1.0 |
-| model | TEXT | Which model was used |
-| raw_response | TEXT | Full LLM response for debugging |
-| classified_at | TEXT | ISO 8601 timestamp |
+| domain_secondary | TEXT | Secondary domain label, nullable |
+| content_type | TEXT | Classified content type |
+| summary | TEXT | Short summary, nullable |
+| tags_json | TEXT | JSON array of tags, nullable |
+| confidence | REAL | 0.0 to 1.0, default `1.0` |
+| model_name | TEXT | Model name, nullable |
+| content_hash | TEXT | Hash of classified content, nullable |
+| created_at | TEXT | ISO 8601 timestamp |
+| updated_at | TEXT | ISO 8601 timestamp |
 
 ### embeddings
 
-Vector embeddings stored as binary blobs.
+Vector embeddings stored as serialized JSON.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER | Primary key |
-| item_id | INTEGER | FK → items (unique per model) |
-| model | TEXT | "text-embedding-3-small" |
-| dimensions | INTEGER | 1536 |
-| vector | BLOB | Binary float32 array |
+| emb_rowid | INTEGER | Internal SQLite rowid primary key |
+| id | TEXT | Unique ULID identifier |
+| item_id | TEXT | FK → items.id |
+| embedding_model | TEXT | Embedding model name such as "text-embedding-3-small" |
+| dimensions | INTEGER | Embedding dimensionality |
+| embedding_json | TEXT | Serialized embedding payload |
+| source_text_hash | TEXT | Hash of the source text used for embedding, nullable |
+| token_count | INTEGER | Token count used to create the embedding, nullable |
 | created_at | TEXT | ISO 8601 timestamp |
 
-The vector is stored as a packed binary array (`struct.pack('f' * 1536, *embedding)`). At query time, we unpack and compute cosine similarity in Python. It's not as fast as a dedicated vector DB, but for 5,808 items it takes about 50ms — totally fine.
+Embeddings are stored in `embedding_json`. Similarity calculations can still be performed in application code, which remains practical for modest collection sizes.
 
 ### schema_migrations
 
@@ -261,9 +327,10 @@ Version tracking for database migrations.
 
 | Column | Type | Notes |
 |---|---|---|
-| version | INTEGER | Migration version number |
+| version | TEXT | Schema version identifier |
 | applied_at | TEXT | ISO 8601 timestamp |
-| description | TEXT | What this migration did |
+
+The current application schema version is `4.0`.
 
 ## FTS5 Virtual Tables
 
@@ -285,7 +352,7 @@ See [Search](Search.md) for how FTS5 is used in queries.
 
 ## Navigation
 
-- [Home](Home.md) — Back to main page
-- [Architecture](Architecture.md) — Pipeline design
-- [Search](Search.md) — How the search modes use these tables
-- [CLI Reference](CLI-Reference.md) — Commands that read/write these tables
+- [Home](Home.md), back to main page
+- [Architecture](Architecture.md), pipeline design
+- [Search](Search.md), how the search modes use these tables
+- [CLI Reference](CLI-Reference.md), commands that read and write these tables

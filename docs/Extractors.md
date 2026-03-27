@@ -1,336 +1,293 @@
 # Extractors
 
-The extraction system fetches and parses linked URLs from ingested items. It's organized around domain-specific extractors — each one knows how to handle a particular type of URL and pull out structured content.
+Note: extraction only runs on URLs discovered inside already-ingested items. The pipeline scans item text and metadata for links; it does not accept arbitrary URLs as direct input.
 
-All extractors live in `src/ideabank/extractors/` and share a common async interface.
+The extraction system fetches and parses linked URLs from ingested items. The current implementation has 4 extractors: article extraction with `trafilatura`, arXiv extraction via the Atom API, GitHub extraction via the REST API, and YouTube extraction via the transcript API.
+
+All extractors live in `src/ideabank/extraction/` and share a common interface.
 
 ## Overview
 
 ```mermaid
 flowchart TD
-    URL[Item URL] --> ROUTER[router.py]
-    ROUTER -->|arxiv.org| ARXIV[arxiv.py]
-    ROUTER -->|github.com| GH[github.py]
-    ROUTER -->|youtube.com| YT[youtube.py]
-    ROUTER -->|everything else| ART[article.py]
+    ITEM[Ingested item] --> URLS[URLs found in text or metadata]
+    URLS --> ROUTER[src/ideabank/extraction/router.py]
+    ROUTER -->|arxiv.org| ARXIV[src/ideabank/extraction/arxiv.py]
+    ROUTER -->|github.com| GH[src/ideabank/extraction/github.py]
+    ROUTER -->|youtube.com / youtu.be| YT[src/ideabank/extraction/youtube.py]
+    ROUTER -->|other supported HTTP URLs| ART[src/ideabank/extraction/article.py]
 
     ARXIV --> LC[(linked_content)]
     GH --> LC
     YT --> LC
     ART --> LC
 
-    BATCH[batch.py] -->|orchestrates| ROUTER
-    BASE[base.py] -->|defines interface| ARXIV
+    BATCH[src/ideabank/extraction/batch.py] -->|orchestrates| ROUTER
+    BASE[src/ideabank/extraction/base.py] -->|defines interface| ARXIV
     BASE -->|defines interface| GH
     BASE -->|defines interface| YT
     BASE -->|defines interface| ART
 ```
 
-## base.py — Abstract Base Class
+## base.py - Abstract Base Class
 
-All extractors inherit from `BaseExtractor`. This defines the interface and provides shared functionality like HTTP client setup and error handling.
-
-```python
-class BaseExtractor(ABC):
-    def __init__(self, client: httpx.AsyncClient):
-        self.client = client
-
-    @abstractmethod
-    def can_handle(self, url: str) -> bool:
-        """Return True if this extractor handles the given URL."""
-        ...
-
-    @abstractmethod
-    async def extract(self, url: str) -> ExtractResult:
-        """Fetch and parse the URL. Return structured content."""
-        ...
-
-    @property
-    @abstractmethod
-    def extractor_name(self) -> str:
-        """Identifier stored in linked_content.extractor column."""
-        ...
-```
-
-`ExtractResult` is a dataclass:
+All extractors inherit from `BaseExtractor`. The base module defines the shared interface and the `ExtractionResult` dataclass that flows through the rest of the pipeline.
 
 ```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional
+
+
 @dataclass
-class ExtractResult:
+class ExtractionResult:
     url: str
-    extracted_text: str
-    metadata: dict[str, Any]
-    success: bool
-    error: str | None = None
+    canonical_url: str
+    title: Optional[str] = None
+    text: Optional[str] = None
+    word_count: int = 0
+    content_type: Optional[str] = None
+    extractor: Optional[str] = None
+    error: Optional[str] = None
+
+
+class BaseExtractor(ABC):
+    name: str = "base"
+
+    @abstractmethod
+    async def extract(self, url: str) -> ExtractionResult:
+        """Extract content from a URL."""
+        ...
+
+    @abstractmethod
+    def can_handle(self, url: str, domain: str) -> bool:
+        """Check whether this extractor should handle the URL."""
+        ...
 ```
 
-Every extractor returns this same shape. The `metadata` dict holds extractor-specific fields (star count for GitHub, video duration for YouTube, etc.), while `extracted_text` is always plain text suitable for classification and embedding.
+`ExtractionResult.success` is derived from whether `text` is present and non-empty. Concrete extractors are responsible for fetching content, normalizing the canonical URL, and populating the result fields.
 
-## router.py — URL Routing
+## router.py - URL Routing
 
-The router maintains a list of extractors in priority order and picks the first one that returns `True` from `can_handle()`.
+The router keeps a module-level list of extractor instances in priority order and returns the first extractor whose `can_handle()` method matches the URL.
 
 ```python
-class ExtractorRouter:
-    def __init__(self, client: httpx.AsyncClient):
-        self.extractors: list[BaseExtractor] = [
-            ArxivExtractor(client),
-            GitHubExtractor(client),
-            YouTubeExtractor(client),
-            ArticleExtractor(client),  # fallback — handles everything
-        ]
+_EXTRACTORS: list[BaseExtractor] = [
+    ArxivExtractor(),
+    YouTubeExtractor(),
+    GitHubExtractor(),
+    ArticleExtractor(),  # fallback, must be last
+]
 
-    def route(self, url: str) -> BaseExtractor:
-        for extractor in self.extractors:
-            if extractor.can_handle(url):
-                return extractor
-        # ArticleExtractor.can_handle() always returns True,
-        # so we never actually reach here
-        raise ValueError(f"No extractor for {url}")
+
+def route_url(url: str) -> Optional[BaseExtractor]:
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower().replace("www.", "")
+
+    for extractor in _EXTRACTORS:
+        if extractor.can_handle(url, domain):
+            return extractor
+    return None
 ```
 
-Order matters. The `ArticleExtractor` is last because it's the fallback — it handles any URL. Domain-specific extractors are checked first so an arXiv URL doesn't get treated as a generic article.
+Order matters. `ArticleExtractor` is last because it is the generic fallback for remaining supported HTTP URLs. The specialized extractors are checked first so arXiv, GitHub, and YouTube URLs do not fall through to generic article extraction.
 
-## article.py — Generic Article Extraction
+## article.py - Generic Article Extraction
 
-The workhorse extractor. Handles any webpage by fetching the HTML and running it through readability to pull out the main content, stripping ads, navigation, and boilerplate.
+The article extractor handles remaining HTTP URLs and uses `trafilatura` to pull main page content from HTML.
 
 ```python
 class ArticleExtractor(BaseExtractor):
-    extractor_name = "article"
+    name = "trafilatura"
 
-    def can_handle(self, url: str) -> bool:
-        return True  # fallback for everything
+    def can_handle(self, url: str, domain: str) -> bool:
+        if domain in self.SKIP_DOMAINS:
+            return False
+        return url.startswith(("http://", "https://"))
 
-    async def extract(self, url: str) -> ExtractResult:
-        response = await self.client.get(url, follow_redirects=True, timeout=30.0)
-        response.raise_for_status()
-
-        doc = readability.Document(response.text)
-        title = doc.title()
-        content = doc.summary()  # HTML of main content
-        text = html_to_text(content)  # Strip tags
-
-        return ExtractResult(
+    async def extract(self, url: str) -> ExtractionResult:
+        result = ExtractionResult(
             url=url,
-            extracted_text=text,
-            metadata={"title": title, "word_count": len(text.split())},
-            success=True,
+            canonical_url=url,
+            extractor=self.name,
+            content_type="article",
         )
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(15.0),
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+
+        result.canonical_url = str(resp.url)
+        text = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False,
+            favor_recall=True,
+        )
+
+        result.text = text
+        result.word_count = len(text.split()) if text else 0
+        return result
 ```
 
-Uses the `readability-lxml` library, which is a Python port of Mozilla's Readability.js. It does a good job on most blogs and news sites. Occasionally it grabs the wrong content block on sites with unusual layouts, but that's rare enough that I haven't needed a fallback.
+The production implementation also skips a small set of social domains, rejects very short extractions, truncates very long text, and tries to recover a title from `trafilatura` metadata or the HTML `<title>` tag.
 
-## arxiv.py — ArXiv Paper Extraction
+## arxiv.py - ArXiv Paper Extraction
 
-Pulls metadata and abstracts from arXiv papers using their API.
+Pulls abstracts and basic paper metadata from arXiv papers using the Atom API.
 
 ```python
 class ArxivExtractor(BaseExtractor):
-    extractor_name = "arxiv"
+    name = "arxiv_api"
 
-    def can_handle(self, url: str) -> bool:
-        return "arxiv.org" in url
+    def can_handle(self, url: str, domain: str) -> bool:
+        return domain == "arxiv.org" and self._ARXIV_ID_PATTERN.search(url) is not None
 
-    async def extract(self, url: str) -> ExtractResult:
-        arxiv_id = self._parse_arxiv_id(url)  # e.g., "2301.07041"
-        api_url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+    async def extract(self, url: str) -> ExtractionResult:
+        paper_id = self._extract_paper_id(url)
+        api_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
 
-        response = await self.client.get(api_url, timeout=15.0)
-        entry = parse_atom_entry(response.text)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            resp = await client.get(api_url)
+            resp.raise_for_status()
+            xml = resp.text
 
-        text = f"{entry.title}\n\n{entry.abstract}"
-
-        return ExtractResult(
-            url=url,
-            extracted_text=text,
-            metadata={
-                "arxiv_id": arxiv_id,
-                "title": entry.title,
-                "authors": entry.authors,
-                "categories": entry.categories,
-                "published": entry.published,
-                "pdf_url": entry.pdf_url,
-            },
-            success=True,
-        )
+        # Parse title, abstract, authors, and categories from the Atom XML
+        ...
 ```
 
-The arXiv API returns Atom XML. I parse it with `xml.etree.ElementTree` rather than pulling in a full XML library. The extractor handles both `arxiv.org/abs/XXXX` and `arxiv.org/pdf/XXXX` URL formats.
+The extractor handles both `arxiv.org/abs/XXXX` and `arxiv.org/pdf/XXXX` URLs, then normalizes the stored canonical URL to `https://arxiv.org/abs/{paper_id}`. The current implementation parses the Atom response directly and builds a combined text block for downstream classification and embedding.
 
-One gotcha: arXiv rate-limits API requests. The batch processor (below) respects this by throttling arXiv requests to 1 per 3 seconds.
+## github.py - GitHub Repository Extraction
 
-## github.py — GitHub Repository Extraction
-
-Fetches repo metadata from the GitHub API. Requires a `GITHUB_TOKEN` for higher rate limits, but works without one for public repos (at 60 requests/hour).
+Fetches repository metadata and README content from the GitHub REST API.
 
 ```python
 class GitHubExtractor(BaseExtractor):
-    extractor_name = "github"
+    name = "github_api"
 
-    def can_handle(self, url: str) -> bool:
-        return "github.com" in url and self._is_repo_url(url)
+    def can_handle(self, url: str, domain: str) -> bool:
+        return domain == "github.com" and self._REPO_PATTERN.search(url) is not None
 
-    async def extract(self, url: str) -> ExtractResult:
-        owner, repo = self._parse_repo(url)  # e.g., ("pytorch", "pytorch")
-        api_url = f"https://api.github.com/repos/{owner}/{repo}"
+    async def extract(self, url: str) -> ExtractionResult:
+        owner, repo = self._parse_repo(url)
 
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        if token := os.environ.get("GITHUB_TOKEN"):
-            headers["Authorization"] = f"token {token}"
-
-        response = await self.client.get(api_url, headers=headers, timeout=15.0)
-        data = response.json()
-
-        text = f"{data['full_name']}: {data['description'] or 'No description'}"
-        if data.get("topics"):
-            text += f"\nTopics: {', '.join(data['topics'])}"
-
-        return ExtractResult(
-            url=url,
-            extracted_text=text,
-            metadata={
-                "full_name": data["full_name"],
-                "description": data["description"],
-                "stars": data["stargazers_count"],
-                "forks": data["forks_count"],
-                "language": data["language"],
-                "languages_url": data["languages_url"],
-                "topics": data.get("topics", []),
-                "created_at": data["created_at"],
-                "updated_at": data["updated_at"],
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0),
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "IdeaBank/1.0",
             },
-            success=True,
-        )
+        ) as client:
+            repo_resp = await client.get(f"https://api.github.com/repos/{owner}/{repo}")
+            readme_resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/readme",
+                headers={"Accept": "application/vnd.github.v3.raw"},
+            )
+
+        # Build text from repository metadata and README content
+        ...
 ```
 
-The `can_handle` check uses `_is_repo_url()` to distinguish repo URLs from other GitHub URLs (issues, gists, profile pages). Non-repo GitHub URLs fall through to the article extractor.
+The current implementation uses unauthenticated GitHub API requests and canonicalizes matched URLs to `https://github.com/{owner}/{repo}`. If a README is unavailable but the repository description exists, the extractor still returns a short text payload.
 
-## youtube.py — YouTube Video Extraction
+## youtube.py - YouTube Video Extraction
 
-Fetches video metadata and, when available, the transcript.
+Fetches transcript text with `youtube-transcript-api` and attempts a best-effort title lookup via YouTube oEmbed.
 
 ```python
 class YouTubeExtractor(BaseExtractor):
-    extractor_name = "youtube"
+    name = "youtube_transcript"
 
-    def can_handle(self, url: str) -> bool:
-        return "youtube.com/watch" in url or "youtu.be/" in url
+    def can_handle(self, url: str, domain: str) -> bool:
+        return domain in {"youtube.com", "youtu.be", "m.youtube.com"}
 
-    async def extract(self, url: str) -> ExtractResult:
-        video_id = self._parse_video_id(url)
+    async def extract(self, url: str) -> ExtractionResult:
+        video_id = self._extract_video_id(url)
+        transcript = YouTubeTranscriptApi().fetch(video_id)
 
-        # Fetch metadata via oEmbed (no API key needed)
-        oembed_url = f"https://www.youtube.com/oembed?url=https://youtube.com/watch?v={video_id}&format=json"
-        meta_response = await self.client.get(oembed_url, timeout=15.0)
-        meta = meta_response.json()
-
-        # Try to get transcript
-        transcript_text = ""
-        try:
-            transcript = await self._fetch_transcript(video_id)
-            transcript_text = " ".join(entry["text"] for entry in transcript)
-        except TranscriptUnavailable:
-            pass  # Not all videos have transcripts
-
-        text = f"{meta['title']} by {meta['author_name']}"
-        if transcript_text:
-            text += f"\n\nTranscript:\n{transcript_text}"
-
-        return ExtractResult(
+        text = " ".join(snippet.text for snippet in transcript.snippets)
+        result = ExtractionResult(
             url=url,
-            extracted_text=text,
-            metadata={
-                "video_id": video_id,
-                "title": meta["title"],
-                "author": meta["author_name"],
-                "author_url": meta["author_url"],
-                "has_transcript": bool(transcript_text),
-                "transcript_length": len(transcript_text),
-            },
-            success=True,
+            canonical_url=f"https://www.youtube.com/watch?v={video_id}",
+            extractor=self.name,
+            content_type="transcript",
+            text=text,
+            word_count=len(text.split()),
         )
+        return result
 ```
 
-Transcript fetching uses the `youtube-transcript-api` library. When a transcript isn't available (private video, disabled captions), the extractor still returns the title and channel name — that's enough for classification and basic search.
+If the transcript package is not installed, or no transcript can be fetched, extraction returns an error. Title lookup through oEmbed is best-effort and does not block transcript extraction.
 
-## batch.py — Async Batch Processing
+## batch.py - Async Batch Processing
 
-Orchestrates extraction across many items with concurrency control. This is what `ib extract` calls.
+Orchestrates extraction across many items with concurrency control. This is what `ib extract` calls after selecting items from the repository.
 
 ```python
-class BatchExtractor:
-    def __init__(
-        self,
-        db: Database,
-        concurrency: int = 10,
-        timeout: float = 30.0,
-    ):
-        self.db = db
-        self.semaphore = asyncio.Semaphore(concurrency)
-        self.timeout = timeout
+async def extract_batch(
+    repo: Repository,
+    items: list,
+    concurrency: int = 3,
+    rate_limit_delay: float = 1.0,
+) -> dict:
+    stats = {"processed": 0, "extracted": 0, "skipped": 0, "failed": 0, "no_urls": 0}
+    semaphore = asyncio.Semaphore(concurrency)
 
-    async def run(self, items: list[Item]) -> BatchResult:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            router = ExtractorRouter(client)
-            tasks = [self._extract_one(router, item) for item in items]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+    for item in items:
+        urls = extract_urls_from_item(item)
+        if not urls:
+            stats["no_urls"] += 1
+            stats["processed"] += 1
+            continue
 
-        success = sum(1 for r in results if isinstance(r, ExtractResult) and r.success)
-        failed = len(results) - success
-        return BatchResult(total=len(items), success=success, failed=failed)
-
-    async def _extract_one(self, router: ExtractorRouter, item: Item) -> ExtractResult:
-        async with self.semaphore:
-            extractor = router.route(item.canonical_uri)
-            result = await extractor.extract(item.canonical_uri)
-
-            if result.success:
-                await self.db.insert_linked_content(
-                    item_id=item.id,
-                    url=result.url,
-                    extractor=extractor.extractor_name,
-                    extracted_text=result.extracted_text,
-                    metadata_json=json.dumps(result.metadata),
-                )
-
-            return result
+        tasks = [
+            extract_single(repo, item.id, url, semaphore, rate_limit_delay)
+            for url in urls
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        ...
 ```
 
-The `asyncio.Semaphore` limits concurrent HTTP requests. Without it, firing off 5,808 requests simultaneously would get us rate-limited by every API and probably crash the event loop. At concurrency=10, extraction is fast without being obnoxious.
+`extract_urls_from_item()` scans already-ingested item text and metadata for URLs, filters a small set of known social and media domains, then sends the remaining URLs through `route_url()`. The default concurrency is 3, which matches `ExtractionConfig.concurrency` and the CLI option default.
 
-`asyncio.gather` with `return_exceptions=True` means one failed extraction doesn't kill the whole batch. Failed items get logged and can be retried on the next run.
+`asyncio.Semaphore` limits concurrent HTTP requests, and `asyncio.gather(..., return_exceptions=True)` keeps one failed URL from stopping the rest of the batch.
 
 ## Adding a New Extractor
 
 To add a new domain extractor:
 
-1. Create `src/ideabank/extractors/newdomain.py`
-2. Subclass `BaseExtractor`, implement `can_handle()`, `extract()`, and `extractor_name`
-3. Add it to the `ExtractorRouter` list in `router.py` (before `ArticleExtractor`)
-4. The rest of the pipeline (classify, embed, search) works automatically — no changes needed
+1. Create `src/ideabank/extraction/newdomain.py`
+2. Subclass `BaseExtractor`, implement `can_handle(url, domain)` and `extract(url)`, and set a `name`
+3. Add the new extractor instance to `_EXTRACTORS` in `src/ideabank/extraction/router.py`, before `ArticleExtractor()`
+4. The rest of the pipeline, classify, embed, and search, usually works automatically without further changes
 
 ```python
 class RedditExtractor(BaseExtractor):
-    extractor_name = "reddit"
+    name = "reddit_api"
 
-    def can_handle(self, url: str) -> bool:
-        return "reddit.com" in url
+    def can_handle(self, url: str, domain: str) -> bool:
+        return domain == "reddit.com"
 
-    async def extract(self, url: str) -> ExtractResult:
-        # Fetch the JSON version of any Reddit URL
-        json_url = url.rstrip("/") + ".json"
-        response = await self.client.get(
-            json_url,
-            headers={"User-Agent": "IdeaBank/1.0"},
-            timeout=15.0,
+    async def extract(self, url: str) -> ExtractionResult:
+        result = ExtractionResult(
+            url=url,
+            canonical_url=url,
+            extractor=self.name,
+            content_type="thread",
         )
-        # ... parse and return ExtractResult
+        # Fetch, parse, and set result.text / result.word_count
+        return result
 ```
 
 ## Navigation
 
-- [Home](Home.md) — Back to main page
-- [Architecture](Architecture.md) — Where extraction fits in the pipeline
-- [CLI Reference](CLI-Reference.md) — `ib extract` command
-- [Database Schema](Database-Schema.md) — `linked_content` table where results are stored
+- [Home](Home.md) - Back to main page
+- [Architecture](Architecture.md) - Where extraction fits in the pipeline
+- [CLI Reference](CLI-Reference.md) - `ib extract` command
+- [Database Schema](Database-Schema.md) - `linked_content` table where results are stored

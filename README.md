@@ -134,11 +134,11 @@ flowchart LR
     D --> E["Search\nKeyword, semantic, hybrid"]
     E --> F["Export\nObsidian markdown"]
 
-    DB[("SQLite")] --- A
-    DB --- B
-    DB --- C
-    DB --- D
-    DB --- E
+    DB[("SQLite")] <--> A
+    DB <--> B
+    DB <--> C
+    DB <--> D
+    DB <--> E
 
     style A fill:#F59E0B,color:#fff,stroke:none
     style B fill:#3B82F6,color:#fff,stroke:none

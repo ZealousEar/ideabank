@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png" />
-    <img src="assets/banner-dark.png" alt="IdeaBank" width="600" />
+    <img src="assets/banner-dark.png" alt="IdeaBank" width="100%" />
   </picture>
 </p>
 

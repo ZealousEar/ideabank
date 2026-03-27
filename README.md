@@ -1,13 +1,17 @@
-<!-- BANNER: Replace with ideabank-banner.png (Helvetica-style wordmark, transparent background) -->
 <p align="center">
-  <img src="assets/banner.png" alt="IdeaBank" width="600" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png" />
+    <img src="assets/banner-dark.png" alt="IdeaBank" width="600" />
+  </picture>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-blue?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/async-first-purple?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/search-FTS5%20%2B%20semantic%20%2B%20hybrid-orange?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/PyPI-v0.2.0-orange?style=flat-square&logo=pypi&logoColor=white" />
+  <img src="https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square" />
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square" />
+  <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" />
 </p>
 
 <p align="center">

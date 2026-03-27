@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/status-alpha-red?style=flat-square" />
   <img src="https://img.shields.io/badge/PyPI-v0.2.0-orange?style=flat-square&logo=pypi&logoColor=white" />
-  <img src="https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square" />
   <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" />
@@ -19,6 +19,8 @@
   <br />
   <em>Ingest anything. Classify with AI. Search by meaning.</em>
 </p>
+
+> **This project is in alpha.** Things will break, APIs will change, and features are still landing. If you're here early — welcome. Feedback and contributions are very much appreciated.
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> &bull;
@@ -125,17 +127,17 @@ Your content flows through six stages. Each one is optional — run what you nee
 
 ```mermaid
 flowchart LR
-    A["🗂️ Ingest\nImport bookmarks,\nchats, files"] --> B["📄 Extract\nFetch full text\nfrom URLs"]
-    B --> C["🏷️ Classify\nAI-powered tags,\nsummaries, domains"]
-    C --> D["🧬 Embed\nConvert to vectors\nfor meaning search"]
-    D --> E["🔍 Search\nKeyword, semantic,\nor hybrid"]
-    E --> F["📝 Export\nObsidian markdown\nwith wikilinks"]
+    A["Ingest\nBookmarks, chats, files"] --> B["Extract\nFull text from URLs"]
+    B --> C["Classify\nAI tags and summaries"]
+    C --> D["Embed\nVectors for meaning search"]
+    D --> E["Search\nKeyword, semantic, hybrid"]
+    E --> F["Export\nObsidian markdown"]
 
-    A <--> DB[("💾 SQLite")]
-    B <--> DB
-    C <--> DB
-    D <--> DB
-    E <--> DB
+    DB[("SQLite")] --- A
+    DB --- B
+    DB --- C
+    DB --- D
+    DB --- E
 
     style A fill:#F59E0B,color:#fff,stroke:none
     style B fill:#3B82F6,color:#fff,stroke:none
@@ -168,9 +170,9 @@ Three ways to find what you're looking for:
 
 ```mermaid
 flowchart LR
-    Q["Your query"] --> KW["🔤 Keyword\nExact word matching"]
-    Q --> SM["🧠 Semantic\nMeaning-based"]
-    Q --> HY["⚡ Hybrid\nBest of both"]
+    Q["Your query"] --> KW["Keyword\nExact word matching"]
+    Q --> SM["Semantic\nMeaning-based"]
+    Q --> HY["Hybrid\nBest of both"]
 
     KW --> R["Results"]
     SM --> R
@@ -353,6 +355,7 @@ Yes. Everything stays on your computer in a local file. The only external calls 
 
 ## Roadmap
 
+- [ ] End-to-end Twitter bookmarks to knowledge base pipeline (one command)
 - [ ] Chrome / Brave bookmark import
 - [ ] Pocket & Readwise sync
 - [ ] RSS feed monitoring

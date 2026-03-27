@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ideabank"
+version = "0.2.0"
+description = "Turn scattered bookmarks, AI chats, and articles into a searchable knowledge base"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Farhad Chichgar", email = "farhad@zealousear.dev" },
+]
+keywords = ["knowledge-base", "second-brain", "embeddings", "obsidian", "rag", "semantic-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "aiosqlite>=0.19.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "python-ulid>=2.0.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0.0",
+    "httpx>=0.27.0",
+    "trafilatura>=1.8.0",
+    "youtube-transcript-api>=0.6.0",
+    "openai>=1.30.0",
+]
+
+[project.optional-dependencies]
+vector = ["sqlite-vec>=0.1.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+ib = "ideabank.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/ZealousEar/ideabank"
+Repository = "https://github.com/ZealousEar/ideabank"
+Issues = "https://github.com/ZealousEar/ideabank/issues"
+Documentation = "https://github.com/ZealousEar/ideabank/tree/main/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ideabank"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_return_any = true
+warn_unused_configs = true

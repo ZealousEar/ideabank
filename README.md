@@ -67,13 +67,13 @@ Your data stays on your machine in a single SQLite file.
 
 | Source | What you give it | What you get back |
 |:-------|:-----------------|:------------------|
-| **Twitter / X** | Your bookmarks JSON export | Every tweet, author, image, and linked article |
+| **Twitter / X** | Your bookmarks JSON export | Every tweet, author, image, and linked article — fully searchable |
 | **ChatGPT** | `conversations.json` from your data export | All your chats, organized by conversation, with model info |
 | **Claude** | JSON export | Every message, with role attribution |
 | **YouTube** | Links found in your bookmarks | Full video transcripts, searchable by content |
 | **ArXiv** | Paper links found in your bookmarks | Titles, abstracts, and metadata |
 | **GitHub** | Repo links found in your bookmarks | README content and repo metadata |
-| **Any URL** | Article links found in your content | Cleaned full-text, stripped of ads and navigation |
+| **Any URL** | Article links found in your content | Cleaned full-text — ads and navigation stripped |
 
 <details>
 <summary>Coming soon</summary>
@@ -118,13 +118,13 @@ ib semantic "papers about reasoning"  # meaning-based search
 ib hybrid "LLM agents"               # combined search
 ```
 
-> **Note:** Classification and embedding need an OpenAI API key (`export OPENAI_API_KEY=sk-...`). Importing, article extraction, and keyword search work without one.
+> **Note:** Classification and embedding need an OpenAI API key (`export OPENAI_API_KEY=sk-...`). Everything else — importing, article extraction, keyword search — works without one.
 
 ---
 
 ## How It Works
 
-Your content flows through six stages. Each one is optional. Run what you need, skip what you don't.
+Your content flows through six stages. Each one is optional — run what you need, skip what you don't.
 
 ```mermaid
 flowchart LR
@@ -155,7 +155,7 @@ flowchart LR
 | Stage | What it does | Tech | Needs API key? |
 |:------|:-------------|:-----|:---------------|
 | **Ingest** | Parses Twitter bookmark exports and AI conversation logs into normalized items | JSON parsing, SHA256 dedup | No |
-| **Extract** | Fetches full text behind URLs, routing to specialized extractors per domain | httpx, trafilatura, ArXiv API, YouTube transcript API | No |
+| **Extract** | Fetches full text behind URLs — routes to specialized extractors per domain | httpx, trafilatura, ArXiv API, YouTube transcript API | No |
 | **Classify** | Labels each item with domain, content type, summary, and tags | GPT-4.1-mini with heuristic fallback | Yes |
 | **Embed** | Creates 1536-dimensional vector representations for semantic similarity | text-embedding-3-small | Yes |
 | **Search** | Keyword (FTS5/BM25), semantic (cosine similarity), or hybrid (Reciprocal Rank Fusion) | SQLite FTS5, numpy | Semantic/hybrid only |
@@ -184,17 +184,17 @@ flowchart LR
     style R fill:#1E293B,color:#fff,stroke:#475569
 ```
 
-**Keyword** matches exact words. Fast and precise when you know what term you're looking for.
+**Keyword** — matches exact words. Fast and precise when you know what term you're looking for.
 ```bash
 ib search "attention mechanism"
 ```
 
-**Semantic** matches by *meaning*. Searching "how do LLMs reason" returns articles about chain-of-thought prompting, even if those articles don't contain the word "reason."
+**Semantic** — matches by *meaning*. Searching "how do LLMs reason" returns articles about chain-of-thought prompting, even if those articles don't contain the word "reason."
 ```bash
 ib semantic "how do LLMs reason"
 ```
 
-**Hybrid** runs both and merges the results. Recommended for most queries.
+**Hybrid** — runs both and merges the results. Recommended for most queries.
 ```bash
 ib hybrid "reinforcement learning from human feedback"
 ```
@@ -269,7 +269,7 @@ ideabank/
 | **Async** | aiosqlite + httpx | Non-blocking I/O for batch extraction and embedding |
 | **Classification** | OpenAI GPT-4.1-mini | Low cost, fast, effective for tagging |
 | **Embeddings** | text-embedding-3-small (1536d) | Best price-to-quality ratio at personal scale |
-| **Vector search** | sqlite-vec (optional) | Native SQLite extension; falls back to JSON + numpy |
+| **Vector search** | sqlite-vec (optional) | Native SQLite extension — falls back to JSON + numpy |
 | **Extraction** | trafilatura | Best Python library for article text extraction |
 | **CLI** | Typer + Rich | Type-driven argument parsing, pretty terminal output |
 | **IDs** | ULID | Sortable by time, unique, URL-safe |
@@ -318,14 +318,14 @@ embedding:
 <details>
 <summary><strong>Cost?</strong></summary>
 
-Importing, extracting articles, and keyword search are **free**, no API calls. AI classification costs about **$0.01 per 100 items**. Embeddings cost about **$0.002 per 100 items**. Use `--dry-run` on any command to see the estimate before spending.
+Importing, extracting articles, and keyword search are **free** — no API calls. AI classification costs about **$0.01 per 100 items**. Embeddings cost about **$0.002 per 100 items**. Use `--dry-run` on any command to see the estimate before spending.
 
 </details>
 
 <details>
 <summary><strong>Do I need Obsidian?</strong></summary>
 
-No. IdeaBank works as a standalone command-line tool. The Obsidian export is optional. It turns your knowledge base into a connected graph of Markdown notes, but searching, tagging, and organizing all work without it.
+No. IdeaBank works as a standalone command-line tool. The Obsidian export is optional — it turns your knowledge base into a connected graph of Markdown notes, but searching, tagging, and organizing all work without it.
 
 </details>
 
@@ -339,7 +339,7 @@ Yes. Anything compatible with the OpenAI API works: Ollama (free, local), LiteLL
 <details>
 <summary><strong>Twitter bookmark export?</strong></summary>
 
-Go to Settings, Your Account, Download an archive on Twitter/X. Or use a browser extension like [twitter-bookmarks-export](https://github.com/search?q=twitter+bookmarks+export) to get a JSON file. Drop it into `~/.ideabank/raw/twitter/` and run `ib check twitter`.
+Go to Settings, Your Account, Download an archive on Twitter/X. Or use a browser extension like [Twitter Web Exporter](https://github.com/prinsss/twitter-web-exporter) to get a JSON file. Drop it into `~/.ideabank/raw/twitter/` and run `ib check twitter`.
 
 </details>
 

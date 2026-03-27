@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Farhad Chichgar", email = "farhad@zealousear.dev" },
+    { name = "Farhad Chichgar", email = "" },
 ]
 keywords = ["knowledge-base", "second-brain", "embeddings", "obsidian", "rag", "semantic-search"]
 classifiers = [
